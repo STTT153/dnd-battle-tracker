@@ -1,0 +1,8 @@
+__pycache__/
+battle_save.json
+battle_save.json.*
+.codex
+.venv
+.dnd5e
+.style
+
