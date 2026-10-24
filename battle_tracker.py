@@ -14,9 +14,11 @@ except ImportError:
     sys.exit(1)
 
 from battle_logic import Battle, BattleError, JsonStore
+from svg_icons import SvgIconButton
 
 
 SAVE_PATH = Path(__file__).resolve().with_name("battle_save.json")
+RESOURCES_DIR = Path(__file__).resolve().with_name("resources")
 
 
 class BattleApp:
@@ -30,6 +32,8 @@ class BattleApp:
         self.status = tk.StringVar(value="")
         self.heading = tk.StringVar()
         self.form_title = tk.StringVar(value="添加参战者")
+        self.form_mode = "add"
+        self._form_resize_job = None
         self.fields = {key: tk.StringVar() for key in ("name", "kind", "initiative", "max_hp", "hp")}
         self.amount = tk.StringVar(value="1")
         self._build_ui()
@@ -41,38 +45,43 @@ class BattleApp:
     def _build_ui(self):
         self.root.title("D&D 战斗追踪器 · 地下城主助手")
         self.root.geometry("1240x780")
-        self.root.minsize(1080, 680)
+        self.root.minsize(1080, 580)
 
-        # 参考图的中古奇幻插画以低饱和蓝绿、羊皮纸和烛火金为主。
-        # 将其转译为高对比度的桌面工具配色，避免装饰干扰战斗信息。
+        # 接近 VS Code Dark Modern 的深色分层；焦点使用蓝色，运行状态使用绿色。
         self.colors = {
-            "ink": "#1E2A26",
-            "pine": "#243A33",
-            "pine_hover": "#304B41",
-            "moss": "#46604F",
-            "sky": "#6F8FA8",
-            "sky_dark": "#45677F",
-            "parchment": "#EEE7D8",
-            "paper": "#FAF7EF",
-            "paper_alt": "#F4EFE3",
-            "line": "#C8BDA8",
-            "line_dark": "#9E927E",
-            "gold": "#C18A43",
-            "gold_hover": "#D19A50",
-            "rust": "#A14F3E",
-            "rust_hover": "#B75D49",
-            "sage": "#DDE6DA",
-            "mist": "#E1E9EC",
-            "muted": "#68716B",
-            "white": "#FFFDF8",
+            "ink": "#CCCCCC",
+            "pine": "#181818",
+            "pine_hover": "#2A2D2E",
+            "moss": "#2D7D46",
+            "sky": "#3794FF",
+            "sky_dark": "#0E639C",
+            "parchment": "#181818",
+            "paper": "#1F1F1F",
+            "paper_alt": "#252526",
+            "line": "#3E3E42",
+            "line_dark": "#555555",
+            "gold": "#0E639C",
+            "gold_hover": "#1177BB",
+            "rust": "#C74E39",
+            "rust_hover": "#DA5A45",
+            "sage": "#20382B",
+            "mist": "#2A2D2E",
+            "muted": "#9D9D9D",
+            "white": "#F0F0F0",
+            "input": "#313131",
+            "selection": "#094771",
+            "focus": "#007FD4",
         }
         self.root.configure(background=self.colors["parchment"])
+        self.root.option_add("*TCombobox*Listbox.background", self.colors["input"])
+        self.root.option_add("*TCombobox*Listbox.foreground", self.colors["ink"])
+        self.root.option_add("*TCombobox*Listbox.selectBackground", self.colors["selection"])
+        self.root.option_add("*TCombobox*Listbox.selectForeground", self.colors["white"])
 
         families = set(font.families(self.root))
         ui_family = next((name for name in ("PingFang SC", "SF Pro Text", "Helvetica Neue", "Arial")
                           if name in families), "TkDefaultFont")
-        display_family = next((name for name in ("Songti SC", "STSong", "Georgia", ui_family)
-                               if name in families), ui_family)
+        display_family = ui_family
         font.nametofont("TkDefaultFont").configure(family=ui_family, size=12)
         font.nametofont("TkTextFont").configure(family=ui_family, size=12)
         font.nametofont("TkMenuFont").configure(family=ui_family, size=12)
@@ -81,8 +90,8 @@ class BattleApp:
         self.small_font = font.Font(self.root, family=ui_family, size=10)
         self.caption_font = font.Font(self.root, family=ui_family, size=9, weight="bold")
         self.bold_font = font.Font(self.root, family=ui_family, size=12, weight="bold")
-        self.title_font = font.Font(self.root, family=display_family, size=22, weight="bold")
-        self.section_font = font.Font(self.root, family=display_family, size=15, weight="bold")
+        self.title_font = font.Font(self.root, family=display_family, size=18, weight="bold")
+        self.section_font = font.Font(self.root, family=display_family, size=14, weight="bold")
 
         style = ttk.Style(self.root)
         if "clam" in style.theme_names():
@@ -90,11 +99,13 @@ class BattleApp:
         c = self.colors
         style.configure("App.TFrame", background=c["parchment"])
         style.configure("Header.TFrame", background=c["pine"])
-        style.configure("Card.TFrame", background=c["paper"], relief="solid", borderwidth=1)
+        style.configure("Card.TFrame", background=c["paper"], relief="solid", borderwidth=1,
+                        bordercolor=c["line"])
         style.configure("CardBody.TFrame", background=c["paper"])
+        style.configure("App.TPanedwindow", background=c["parchment"])
         style.configure("Toolbar.TFrame", background=c["paper_alt"])
         style.configure("HeaderTitle.TLabel", background=c["pine"], foreground=c["white"], font=self.title_font)
-        style.configure("HeaderMeta.TLabel", background=c["pine"], foreground="#D9E2DC", font=self.small_font)
+        style.configure("HeaderMeta.TLabel", background=c["pine"], foreground=c["muted"], font=self.small_font)
         style.configure("Eyebrow.TLabel", background=c["paper"], foreground=c["sky_dark"], font=self.caption_font)
         style.configure("Section.TLabel", background=c["paper"], foreground=c["ink"], font=self.section_font)
         style.configure("Body.TLabel", background=c["paper"], foreground=c["ink"], font=self.body_font)
@@ -106,57 +117,60 @@ class BattleApp:
         style.configure("EmptyBody.TLabel", background=c["paper"], foreground=c["muted"], font=self.small_font)
 
         button_base = dict(font=self.bold_font, padding=(15, 9), relief="flat", borderwidth=0)
-        style.configure("Primary.TButton", background=c["gold"], foreground=c["ink"], **button_base)
+        style.configure("Primary.TButton", background=c["gold"], foreground=c["white"], **button_base)
         style.map("Primary.TButton",
-                  background=[("disabled", "#D8C8AA"), ("pressed", "#A87538"), ("active", c["gold_hover"])],
-                  foreground=[("disabled", "#847B6B")])
+                  background=[("disabled", "#3A3D41"), ("pressed", "#094E7A"), ("active", c["gold_hover"])],
+                  foreground=[("disabled", "#808080")])
         style.configure("Secondary.TButton", background=c["sky_dark"], foreground=c["white"], **button_base)
         style.map("Secondary.TButton",
-                  background=[("disabled", "#AEBBC0"), ("pressed", "#38566A"), ("active", c["sky"])],
-                  foreground=[("disabled", "#EEF1F0")])
+                  background=[("disabled", "#3A3D41"), ("pressed", "#094E7A"), ("active", c["gold_hover"])],
+                  foreground=[("disabled", "#808080")])
         style.configure("HeaderGhost.TButton", background=c["pine"], foreground=c["white"],
                         font=self.bold_font, padding=(13, 8), relief="solid", borderwidth=1)
         style.map("HeaderGhost.TButton",
-                  background=[("pressed", "#1C2E28"), ("active", c["pine_hover"])],
-                  bordercolor=[("!disabled", "#70857A")])
+                  background=[("pressed", "#333333"), ("active", c["pine_hover"])],
+                  bordercolor=[("focus", c["focus"]), ("!focus", c["line_dark"])])
         style.configure("HeaderDanger.TButton", background=c["rust"], foreground=c["white"],
                         font=self.bold_font, padding=(13, 8), relief="flat", borderwidth=0)
         style.map("HeaderDanger.TButton",
-                  background=[("disabled", "#6D7069"), ("pressed", "#873E31"), ("active", c["rust_hover"])],
-                  foreground=[("disabled", "#D4D6D2")])
+                  background=[("disabled", "#3A3D41"), ("pressed", "#973D2C"), ("active", c["rust_hover"])],
+                  foreground=[("disabled", "#808080")])
         style.configure("Quiet.TButton", background=c["paper_alt"], foreground=c["ink"],
                         font=self.body_font, padding=(11, 7), relief="flat", borderwidth=0)
-        style.map("Quiet.TButton", background=[("pressed", "#DED5C5"), ("active", "#E7DFD0")])
+        style.map("Quiet.TButton", background=[("pressed", "#333333"), ("active", c["pine_hover"])],
+                  bordercolor=[("focus", c["focus"])])
         style.configure("Danger.TButton", background=c["paper_alt"], foreground=c["rust"],
                         font=self.bold_font, padding=(11, 7), relief="flat", borderwidth=0)
-        style.map("Danger.TButton", background=[("pressed", "#E7CFC8"), ("active", "#F1DDD7")],
+        style.map("Danger.TButton", background=[("pressed", "#3A2927"), ("active", "#342522")],
                   foreground=[("active", c["rust_hover"])])
+        style.configure("FormFooter.TFrame", background=c["paper"])
         style.configure("Damage.TButton", background=c["rust"], foreground=c["white"], **button_base)
-        style.map("Damage.TButton", background=[("pressed", "#873E31"), ("active", c["rust_hover"])])
+        style.map("Damage.TButton", background=[("pressed", "#973D2C"), ("active", c["rust_hover"])])
         style.configure("Heal.TButton", background=c["moss"], foreground=c["white"], **button_base)
-        style.map("Heal.TButton", background=[("pressed", "#35493C"), ("active", "#587563")])
-        style.configure("Field.TEntry", fieldbackground=c["white"], foreground=c["ink"],
+        style.map("Heal.TButton", background=[("pressed", "#245F37"), ("active", "#379354")])
+        style.configure("Field.TEntry", fieldbackground=c["input"], foreground=c["white"],
                         bordercolor=c["line"], lightcolor=c["line"], darkcolor=c["line"],
-                        insertcolor=c["ink"], padding=(9, 8))
-        style.map("Field.TEntry", bordercolor=[("focus", c["sky_dark"])], lightcolor=[("focus", c["sky_dark"])])
-        style.configure("Field.TCombobox", fieldbackground=c["white"], background=c["white"],
-                        foreground=c["ink"], bordercolor=c["line"], arrowcolor=c["pine"], padding=(9, 7))
-        style.map("Field.TCombobox", bordercolor=[("focus", c["sky_dark"])],
-                  fieldbackground=[("readonly", c["white"])], foreground=[("readonly", c["ink"])])
+                        insertcolor=c["white"], padding=(9, 8))
+        style.map("Field.TEntry", bordercolor=[("focus", c["focus"])], lightcolor=[("focus", c["focus"])])
+        style.configure("Field.TCombobox", fieldbackground=c["input"], background=c["input"],
+                        foreground=c["ink"], bordercolor=c["line"], arrowcolor=c["ink"], padding=(9, 7))
+        style.map("Field.TCombobox", bordercolor=[("focus", c["focus"])],
+                  fieldbackground=[("readonly", c["input"])], foreground=[("readonly", c["ink"])])
         style.configure("Treeview", background=c["paper"], fieldbackground=c["paper"], foreground=c["ink"],
                         bordercolor=c["line"], lightcolor=c["line"], darkcolor=c["line"],
                         rowheight=42, font=self.body_font)
-        style.map("Treeview", background=[("selected", "#CAD9DC")], foreground=[("selected", c["ink"])])
-        style.configure("Treeview.Heading", background=c["pine"], foreground=c["white"],
-                        bordercolor=c["pine"], relief="flat", padding=(8, 10), font=self.bold_font)
+        style.map("Treeview", background=[("selected", c["selection"])], foreground=[("selected", c["white"])])
+        style.configure("Treeview.Heading", background=c["paper_alt"], foreground=c["ink"],
+                        bordercolor=c["line"], relief="flat", padding=(8, 10), font=self.bold_font)
         style.map("Treeview.Heading", background=[("active", c["pine_hover"])])
-        style.configure("Vertical.TScrollbar", background=c["line"], troughcolor=c["paper_alt"],
-                        bordercolor=c["paper_alt"], arrowcolor=c["pine"])
+        style.configure("Vertical.TScrollbar", background="#424242", troughcolor=c["paper"],
+                        bordercolor=c["paper"], lightcolor="#424242", darkcolor="#424242",
+                        arrowcolor=c["ink"], relief="flat", borderwidth=0)
 
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(1, weight=1)
 
-        top = ttk.Frame(self.root, style="Header.TFrame", padding=(24, 18))
+        top = ttk.Frame(self.root, style="Header.TFrame", padding=(18, 11))
         top.grid(row=0, column=0, sticky="ew")
         brand = ttk.Frame(top, style="Header.TFrame")
         brand.pack(side="left", fill="y")
@@ -164,27 +178,42 @@ class BattleApp:
         ttk.Label(brand, textvariable=self.heading, style="HeaderMeta.TLabel").pack(anchor="w", pady=(3, 0))
         actions = ttk.Frame(top, style="Header.TFrame")
         actions.pack(side="right", fill="y")
-        self.end_button = ttk.Button(actions, text="结束战斗", style="HeaderDanger.TButton",
-                                     command=self.end_battle)
-        self.end_button.pack(side="right", padx=(8, 0))
-        ttk.Button(actions, text="新建战斗", style="HeaderGhost.TButton", command=self.new_battle).pack(side="right", padx=(8, 0))
-        self.next_button = ttk.Button(actions, text="下一位", style="Secondary.TButton",
-                                      command=lambda: self.perform(self.battle.next_turn))
-        self.next_button.pack(side="right", padx=(8, 0))
-        self.start_button = ttk.Button(actions, text="开始战斗", style="Primary.TButton",
-                                       command=lambda: self.perform(self.battle.start))
-        self.start_button.pack(side="right")
+        self.end_button = SvgIconButton(
+            actions, RESOURCES_DIR / "Stop.svg", c["white"],
+            command=self.end_battle, icon_name="Stop", disabled_color=c["white"])
+        self.end_button.pack(side="right", padx=(2, 0))
+        self.next_button = SvgIconButton(
+            actions, RESOURCES_DIR / "Next.svg", c["white"],
+            command=lambda: self.perform(self.battle.next_turn), icon_name="Next",
+            disabled_color=c["white"])
+        self.next_button.pack(side="right", padx=(2, 0))
+        self.start_button = SvgIconButton(
+            actions, RESOURCES_DIR / "Play.svg", c["white"],
+            command=lambda: self.perform(self.battle.start), icon_name="Play",
+            disabled_color=c["white"])
+        self.start_button.pack(side="right", padx=(2, 0))
 
         middle = ttk.Frame(self.root, style="App.TFrame", padding=(18, 18, 18, 0))
         middle.grid(row=1, column=0, sticky="nsew")
         middle.columnconfigure(0, weight=1)
         middle.rowconfigure(0, weight=1)
-        listing = ttk.Frame(middle, style="Card.TFrame", padding=(14, 14))
-        listing.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
+        self.main_pane = ttk.Panedwindow(middle, orient="horizontal", style="App.TPanedwindow")
+        self.main_pane.grid(row=0, column=0, sticky="nsew")
+        listing = ttk.Frame(self.main_pane, style="Card.TFrame", padding=(14, 14))
         listing.columnconfigure(0, weight=1)
-        listing.rowconfigure(2, weight=1)
-        ttk.Label(listing, text="INITIATIVE ORDER  ·  行动序列", style="Eyebrow.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
-        ttk.Label(listing, text="参战者", style="Section.TLabel").grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 12))
+        listing.rowconfigure(1, weight=1)
+        listing_header = ttk.Frame(listing, style="CardBody.TFrame")
+        listing_header.grid(row=0, column=0, columnspan=2, sticky="ew")
+        self.add_monster_button = SvgIconButton(
+            listing_header, RESOURCES_DIR / "AddMonster.svg", c["white"],
+            command=lambda: self.prepare_add("怪物"), icon_name="添加怪物",
+            bg=c["paper"], hover_bg=c["pine_hover"], disabled_color=c["white"])
+        self.add_monster_button.pack(side="right")
+        self.add_player_button = SvgIconButton(
+            listing_header, RESOURCES_DIR / "AddPlayer.svg", c["white"],
+            command=lambda: self.prepare_add("玩家"), icon_name="添加玩家",
+            bg=c["paper"], hover_bg=c["pine_hover"], disabled_color=c["white"])
+        self.add_player_button.pack(side="right", padx=(0, 2))
         columns = ("turn", "kind", "name", "initiative", "hp", "condition")
         self.tree = ttk.Treeview(listing, columns=columns, show="headings", selectmode="browse")
         for key, title, width in zip(columns,
@@ -193,36 +222,59 @@ class BattleApp:
             self.tree.heading(key, text=title)
             self.tree.column(key, width=width, minwidth=width if key != "name" else 110,
                              anchor="w" if key == "name" else "center", stretch=key == "name")
-        self.tree.grid(row=2, column=0, sticky="nsew")
+        self.tree.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
         scroll = ttk.Scrollbar(listing, orient="vertical", style="Vertical.TScrollbar", command=self.tree.yview)
-        scroll.grid(row=2, column=1, sticky="ns")
+        scroll.grid(row=1, column=1, sticky="ns", pady=(10, 0))
         self.tree.configure(yscrollcommand=scroll.set)
-        self.tree.tag_configure("玩家", foreground="#315F4A")
-        self.tree.tag_configure("NPC", foreground="#566484")
-        self.tree.tag_configure("怪物", foreground="#8A5A2F")
-        self.tree.tag_configure("zero", foreground=c["rust"], background="#F7E8E2")
+        self.tree.tag_configure("玩家", foreground="#89D185")
+        self.tree.tag_configure("NPC", foreground="#9CDCFE")
+        self.tree.tag_configure("怪物", foreground="#DCDCAA")
+        self.tree.tag_configure("zero", foreground="#F48771", background="#3A2323")
         self.tree.tag_configure("current", foreground=c["ink"], background=c["sage"], font=self.bold_font)
-        self.tree.tag_configure("current_zero", foreground="#84372D", background="#ECDDD3", font=self.bold_font)
+        self.tree.tag_configure("current_zero", foreground="#F48771", background="#412828", font=self.bold_font)
         self.tree.bind("<<TreeviewSelect>>", self.on_select)
+        self.tree.bind("<ButtonRelease-1>", self.on_tree_click, add="+")
         self.empty_state = ttk.Frame(listing, style="CardBody.TFrame")
         ttk.Label(self.empty_state, text="尚未集结队伍", style="EmptyTitle.TLabel").pack()
-        ttk.Label(self.empty_state, text="在右侧填写资料，添加第一名参战者。", style="EmptyBody.TLabel").pack(pady=(6, 0))
+        ttk.Label(self.empty_state, text="使用列表右上角的玩家或怪物图标开始。", style="EmptyBody.TLabel").pack(pady=(6, 0))
 
         controls = ttk.Frame(listing, style="Toolbar.TFrame", padding=(10, 9))
-        controls.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        controls.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
         ttk.Button(controls, text="按先攻排序", style="Quiet.TButton",
                    command=lambda: self.perform(self.battle.sort)).pack(side="left")
         ttk.Button(controls, text="同先攻上移", style="Quiet.TButton", command=lambda: self.move(-1)).pack(side="left", padx=(6, 0))
         ttk.Button(controls, text="同先攻下移", style="Quiet.TButton", command=lambda: self.move(1)).pack(side="left", padx=(6, 0))
         ttk.Button(controls, text="移除所选", style="Danger.TButton", command=self.remove).pack(side="right")
 
-        form = ttk.Frame(middle, style="Card.TFrame", padding=(16, 14))
-        form.grid(row=0, column=1, sticky="ns")
+        self.form_shell = ttk.Frame(self.main_pane, style="Card.TFrame")
+        self.form_shell.columnconfigure(0, weight=1)
+        self.form_shell.rowconfigure(1, weight=1)
+        form_header = ttk.Frame(self.form_shell, style="CardBody.TFrame", padding=(16, 12, 8, 10))
+        form_header.grid(row=0, column=0, columnspan=2, sticky="ew")
+        form_header.columnconfigure(0, weight=1)
+        self.form_close_button = SvgIconButton(
+            form_header, RESOURCES_DIR / "Close.svg", c["white"],
+            command=self.hide_form, icon_name="关闭档案",
+            bg=c["paper"], hover_bg=c["pine_hover"], disabled_color=c["white"])
+        self.form_close_button.grid(row=0, column=1, sticky="ne")
+        ttk.Label(form_header, textvariable=self.form_title, style="Section.TLabel").grid(
+            row=0, column=0, sticky="w")
+        self.form_canvas = tk.Canvas(self.form_shell, width=300, background=c["paper"],
+                                     highlightthickness=0, borderwidth=0)
+        self.form_canvas.grid(row=1, column=0, sticky="nsew")
+        self.form_scrollbar = ttk.Scrollbar(self.form_shell, orient="vertical", style="Vertical.TScrollbar",
+                                            command=self.form_canvas.yview)
+        self.form_scrollbar.grid(row=1, column=1, sticky="ns")
+        self.form_canvas.configure(yscrollcommand=self.form_scrollbar.set)
+        form = ttk.Frame(self.form_canvas, style="CardBody.TFrame", padding=(16, 14))
+        form_window = self.form_canvas.create_window((0, 0), window=form, anchor="nw")
+        form.bind("<Configure>", lambda _event: self.form_canvas.configure(
+            scrollregion=self.form_canvas.bbox("all")))
+        self.form_canvas.bind("<Configure>", lambda event: self.form_canvas.itemconfigure(
+            form_window, width=event.width))
         form.columnconfigure(1, weight=1)
-        ttk.Label(form, text="COMBATANT  ·  参战者档案", style="Eyebrow.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
-        ttk.Label(form, textvariable=self.form_title, style="Section.TLabel").grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 12))
         for row, (key, title) in enumerate((("name", "名称"), ("kind", "类型"), ("initiative", "先攻值"),
-                                           ("max_hp", "最大 HP"), ("hp", "当前 HP")), start=2):
+                                           ("max_hp", "最大 HP"), ("hp", "当前 HP")), start=0):
             ttk.Label(form, text=title, style="Body.TLabel").grid(row=row, column=0, sticky="w", pady=7)
             if key == "kind":
                 widget = ttk.Combobox(form, textvariable=self.fields[key], values=("玩家", "NPC", "怪物"),
@@ -230,17 +282,19 @@ class BattleApp:
             else:
                 widget = ttk.Entry(form, textvariable=self.fields[key], width=17, style="Field.TEntry")
             widget.grid(row=row, column=1, sticky="ew", padx=(12, 0), pady=7)
-        ttk.Label(form, text="新增时当前 HP 留空 = 最大 HP\n怪物名称自动加编号（从 1 开始）\n编辑名称时无需输入自动编号。",
-                  style="Muted.TLabel", justify="left").grid(row=7, column=0, columnspan=2, sticky="w", pady=(12, 14))
-        ttk.Button(form, text="添加为新参战者", style="Primary.TButton", command=self.add).grid(row=8, column=0, columnspan=2, sticky="ew", pady=(0, 7))
-        self.edit_button = ttk.Button(form, text="保存所选角色修改", style="Secondary.TButton", command=self.edit)
-        self.edit_button.grid(row=9, column=0, columnspan=2, sticky="ew", pady=7)
-        ttk.Button(form, text="清空表单 / 取消选择", style="Quiet.TButton", command=self.clear_form).grid(row=10, column=0, columnspan=2, sticky="ew", pady=(7, 0))
+        form_footer = ttk.Frame(self.form_shell, style="FormFooter.TFrame", padding=(16, 10, 16, 14))
+        form_footer.grid(row=2, column=0, columnspan=2, sticky="ew")
+        self.form_action_button = ttk.Button(form_footer, text="确认添加", style="Primary.TButton",
+                                             command=self.commit_form)
+        self.form_action_button.pack(fill="x")
+        self.main_pane.add(listing, weight=4)
+        self.main_pane.add(self.form_shell, weight=1)
+        self.form_visible = True
+        self.form_width = 360
+        self._schedule_form_width()
 
         hp_panel = ttk.Frame(self.root, style="Card.TFrame", padding=(14, 12))
         hp_panel.grid(row=2, column=0, sticky="ew", padx=18, pady=(14, 8))
-        ttk.Label(hp_panel, text="HP", style="Eyebrow.TLabel").pack(side="left", padx=(0, 8))
-        ttk.Label(hp_panel, text="血量操作", style="Section.TLabel").pack(side="left", padx=(0, 14))
         ttk.Label(hp_panel, text="数值", style="Body.TLabel").pack(side="left", padx=(0, 7))
         ttk.Entry(hp_panel, textvariable=self.amount, width=7, style="Field.TEntry").pack(side="left", padx=(0, 12))
         for title, action, button_style in (("受到伤害", "damage", "Damage.TButton"),
@@ -332,25 +386,92 @@ class BattleApp:
         self.perform(lambda: self.battle.edit(self.selected_id(), **self.form_values()))
 
     def clear_form(self):
+        self.prepare_add("玩家")
+
+    def prepare_add(self, kind):
         if self.tree.selection():
             self.tree.selection_remove(*self.tree.selection())
-        for key, value in {"name": "", "kind": "玩家", "initiative": "0", "max_hp": "10", "hp": ""}.items():
+        for key, value in {"name": "", "kind": kind, "initiative": "0", "max_hp": "10", "hp": ""}.items():
             self.fields[key].set(value)
-        self.form_title.set("添加参战者")
-        self.edit_button.configure(state="disabled")
+        self.form_mode = "add"
+        self.form_title.set(f"添加{kind}")
+        self.form_action_button.configure(text="确认添加", style="Primary.TButton")
+        self.show_form()
+
+    def commit_form(self):
+        if self.form_mode == "edit":
+            self.edit()
+        else:
+            self.add()
+
+    def hide_form(self):
+        if not self.form_visible:
+            return
+        if self._form_resize_job is not None:
+            try:
+                self.root.after_cancel(self._form_resize_job)
+            except tk.TclError:
+                pass
+            self._form_resize_job = None
+        self.main_pane.forget(self.form_shell)
+        self.form_visible = False
+
+    def show_form(self):
+        if not self.form_visible:
+            self.main_pane.add(self.form_shell, weight=1)
+            self.form_visible = True
+        # 先同步完成 pane 的几何计算，让侧栏在本次点击中就展开；再在空闲时
+        # 校正一次，兼容 macOS/Tk 在重新插入 pane 后延迟分配尺寸的行为。
+        try:
+            self.root.update_idletasks()
+        except tk.TclError:
+            return
+        self._restore_form_width()
+        self._schedule_form_width()
+
+    def _schedule_form_width(self):
+        if self._form_resize_job is not None:
+            try:
+                self.root.after_cancel(self._form_resize_job)
+            except tk.TclError:
+                return
+        try:
+            self._form_resize_job = self.root.after_idle(self._restore_form_width)
+        except tk.TclError:
+            self._form_resize_job = None
+
+    def _restore_form_width(self):
+        self._form_resize_job = None
+        try:
+            if (not self.form_visible or not self.main_pane.winfo_exists()
+                    or len(self.main_pane.panes()) < 2):
+                return
+            self.main_pane.update_idletasks()
+            total = self.main_pane.winfo_width()
+            if total <= 1:
+                return
+            panel_width = min(self.form_width, max(280, total - 520))
+            position = total - panel_width
+            self.main_pane.sashpos(0, position)
+        except tk.TclError:
+            pass
+
+    def on_tree_click(self, event):
+        if self.tree.identify_row(event.y):
+            self.root.after_idle(self.on_select)
 
     def on_select(self, _event=None):
         if self.refreshing:
             return
         if not self.tree.selection():
-            self.form_title.set("添加参战者")
-            self.edit_button.configure(state="disabled")
             return
         actor = self.battle.get(self.tree.selection()[0])
         for key in self.fields:
             self.fields[key].set(str(getattr(actor, key)))
-        self.form_title.set("编辑所选参战者")
-        self.edit_button.configure(state="normal")
+        self.form_mode = "edit"
+        self.form_title.set(actor.display_name)
+        self.form_action_button.configure(text="保存修改", style="Secondary.TButton")
+        self.show_form()
 
     def move(self, direction):
         self.perform(lambda: self.battle.move_tied(self.selected_id(), direction))
