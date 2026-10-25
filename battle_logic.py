@@ -46,6 +46,7 @@ class Combatant:
     max_hp: int
     hp: int
     monster_number: Optional[int] = None
+    monster_stats: Optional[dict] = None
 
     @property
     def display_name(self):
@@ -73,13 +74,14 @@ class Battle:
                    if c.kind == "怪物" and c.name == name and c.id != excluded_id]
         return max(numbers, default=0) + 1
 
-    def add(self, name, kind, initiative, max_hp, hp=None):
+    def add(self, name, kind, initiative, max_hp, hp=None, monster_stats=None):
         if hp is None:
             hp = max_hp
         validate_fields(name, kind, initiative, max_hp, hp)
         name = name.strip()
         actor = Combatant(str(uuid4()), name, kind, initiative, max_hp, hp,
-                          self._number(name) if kind == "怪物" else None)
+                          self._number(name) if kind == "怪物" else None,
+                          monster_stats if kind == "怪物" else None)
         self.combatants.append(actor)
         if self.active and self.current_id is None:
             self._choose_pending()
