@@ -1,8 +1,10 @@
 """真实 Tk 控件集成测试：PYTHONPATH=. python3 test/gui_smoke_test.py。"""
 
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import tkinter as tk
+from tkinter import ttk
 import unittest
 from unittest.mock import patch
 
@@ -54,7 +56,7 @@ class GuiTests(unittest.TestCase):
     def add_actor(self, name="哥布林", initiative=10, kind="怪物", max_hp=10, hp=""):
         self.app.clear_form()
         self.app.fields["name"].set(name)
-        self.app.fields["kind"].set(kind)
+        self.app.form_kind = kind
         self.app.fields["initiative"].set(str(initiative))
         self.app.fields["max_hp"].set(str(max_hp))
         self.app.fields["hp"].set(str(hp))
@@ -80,14 +82,35 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(self.app.store.load().to_dict(), self.app.battle.to_dict())
         self.app.remove()
         self.assertIsNone(self.app.battle.current_id)
+        self.assertEqual(self.app.tree.selection(), (a.id,))
         self.assertEqual(self.app.battle.round, 1)
         self.app.next_button.invoke()
         self.assertEqual(self.app.battle.round, 2)
+        self.assertEqual(self.app.combatant_count.get(), "参战人数: 1")
+        self.assertEqual(self.app.round_count.get(), "回合数: 2")
         self.assertEqual(self.app.tree.selection(), (a.id,))
         self.app.tree.selection_set(a.id)
         self.app.remove()
         self.assertEqual(self.app.tree.get_children(), ())
+        self.assertEqual(self.app.tree.selection(), ())
         self.assertFalse(self.app.battle.active)
+
+    def test_delete_selects_next_then_previous_at_list_end(self):
+        first = self.add_actor("甲", kind="玩家")
+        middle = self.add_actor("乙", kind="玩家")
+        last = self.add_actor("丙", kind="玩家")
+        self.app.tree.selection_set(middle.id)
+        self.app.remove()
+        self.assertEqual(self.app.tree.selection(), (last.id,))
+        self.assertEqual(self.app.tree.focus(), last.id)
+        self.assertEqual(self.app.form_title.get(), last.display_name)
+        self.app.remove()
+        self.assertEqual(self.app.tree.selection(), (first.id,))
+        self.assertEqual(self.app.tree.focus(), first.id)
+        self.assertEqual(self.app.form_title.get(), first.display_name)
+        self.app.remove()
+        self.assertEqual(self.app.tree.selection(), ())
+        self.assertEqual(self.app.battle.combatants, [])
 
     def test_damage_healing_and_zero_marker_without_automatic_end(self):
         monster = self.add_actor()
@@ -108,6 +131,44 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(self.app.battle.round, 1)
         self.assertEqual(str(self.app.start_button["state"]), "disabled")
         self.assertEqual(str(self.app.end_button["state"]), "normal")
+
+    def test_copy_paste_and_quick_delete_shortcuts(self):
+        monster = self.add_actor("哥布林", initiative=17, max_hp=25, hp=4)
+        monster.monster_stats = {"traits": ["原始特质"]}
+        self.app.tree.selection_set(monster.id)
+        tree_event = SimpleNamespace(widget=self.app.tree)
+        self.assertTrue(self.root.bind("<Command-BackSpace>"))
+        self.assertTrue(self.root.bind("<Command-Delete>"))
+        self.assertTrue(self.root.bind("<Command-c>"))
+        self.assertTrue(self.root.bind("<Command-v>"))
+        self.assertEqual(self.app._shortcut_copy(tree_event), "break")
+        monster.monster_stats["traits"][0] = "修改后的特质"
+
+        self.assertEqual(self.app._shortcut_paste(tree_event), "break")
+        copy_two = self.app.battle.combatants[-1]
+        self.assertNotEqual(copy_two.id, monster.id)
+        self.assertEqual(copy_two.display_name, "哥布林 2")
+        self.assertEqual((copy_two.kind, copy_two.initiative, copy_two.max_hp, copy_two.hp),
+                         (monster.kind, 17, 25, 4))
+        self.assertEqual(copy_two.monster_stats, {"traits": ["原始特质"]})
+        self.assertEqual(self.app._shortcut_paste(tree_event), "break")
+        copy_three = self.app.battle.combatants[-1]
+        self.assertEqual(copy_three.display_name, "哥布林 3")
+        self.assertEqual(self.app.store.load().to_dict(), self.app.battle.to_dict())
+
+        editor = tk.Entry(self.root)
+        self.app.tree.selection_set(copy_three.id)
+        self.assertIsNone(self.app._shortcut_copy(SimpleNamespace(widget=editor)))
+        self.assertIsNone(self.app._shortcut_paste(SimpleNamespace(widget=editor)))
+        self.assertIsNone(self.app._shortcut_delete(SimpleNamespace(widget=editor)))
+        self.assertEqual(len(self.app.battle.combatants), 3)
+
+        self.assertEqual(self.app._shortcut_delete(tree_event), "break")
+        self.assertFalse(self.app.tree.exists(copy_three.id))
+        self.assertEqual(self.app.tree.selection(), (copy_two.id,))
+        self.assertEqual(len(self.app.battle.combatants), 2)
+        self.confirm.assert_not_called()
+        self.assertEqual(self.app.store.load().to_dict(), self.app.battle.to_dict())
 
     def test_end_button_preserves_combatants_hp_and_order(self):
         monster = self.add_actor(initiative=10)
@@ -133,9 +194,18 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(len(self.app.main_pane.panes()), 2)
         self.root.update()
         old_position = self.app.main_pane.sashpos(0)
-        self.app.main_pane.sashpos(0, old_position - 70)
+        self.assertEqual(str(self.app.resize_handle.cget("cursor")), "sb_h_double_arrow")
+        self.app._start_panel_resize(SimpleNamespace(
+            x_root=self.app.main_pane.winfo_rootx() + old_position))
+        self.app._drag_panel_resize(SimpleNamespace(
+            x_root=self.app.main_pane.winfo_rootx() + old_position - 70))
+        self.app._finish_panel_resize(None)
         self.root.update()
         self.assertNotEqual(self.app.main_pane.sashpos(0), old_position)
+        resized_width = self.app.form_shell.winfo_width()
+        self.app.show_form()
+        self.root.update()
+        self.assertAlmostEqual(self.app.form_shell.winfo_width(), resized_width, delta=10)
         self.app.hide_form()
         self.assertEqual(len(self.app.main_pane.panes()), 1)
         self.app.tree.selection_set(actor.id)
@@ -144,8 +214,7 @@ class GuiTests(unittest.TestCase):
         self.assertTrue(self.app.form_visible)
         self.assertEqual(len(self.app.main_pane.panes()), 2)
         self.assertEqual(self.app.form_title.get(), actor.display_name)
-        self.assertGreaterEqual(self.app.form_shell.winfo_width(), 340)
-        self.assertLessEqual(self.app.form_shell.winfo_width(), 380)
+        self.assertAlmostEqual(self.app.form_shell.winfo_width(), resized_width, delta=10)
         self.assertLessEqual(self.app.form_close_button.winfo_width(), 28)
         self.assertLessEqual(self.app.form_close_button.winfo_height(), 24)
         self.assertGreaterEqual(self.app.form_action_button.winfo_rooty(),
@@ -162,7 +231,7 @@ class GuiTests(unittest.TestCase):
         self.assertEqual(self.app._recent_monsters[0]["id"], monster["id"])
         self.assertEqual(len(self.app._recent_monsters), 1)
         self.assertEqual(self.app.form_mode, "add")
-        self.assertEqual(self.app.fields["kind"].get(), "怪物")
+        self.assertEqual(self.app.form_kind, "怪物")
         self.assertEqual(self.app.fields["name"].get(), monster["name"])
         self.assertEqual(self.app.fields["max_hp"].get(), str(monster["max_hp"]))
         self.assertEqual(self.app.form_title.get(), "添加怪物")
@@ -184,6 +253,19 @@ class GuiTests(unittest.TestCase):
         self.app._apply_handbook_monster(chosen[3])
         self.assertEqual(len(self.app._recent_monsters), 6)
         self.assertEqual(self.app._recent_monsters[0]["id"], chosen[3]["id"])
+
+    def test_list_scrolls_without_moving_heading(self):
+        for number in range(25):
+            self.add_actor(f"参战者 {number}", kind="玩家")
+        self.root.deiconify()
+        self.root.update()
+        self.assertIs(self.app.tree.master, self.app.list_canvas)
+        self.assertLess(self.app.list_canvas.yview()[1], 1.0)
+        heading_y = self.app.list_heading.winfo_rooty()
+        self.app.list_canvas.yview_moveto(0.01)
+        self.root.update()
+        self.assertGreater(self.app.list_canvas.canvasy(0), 0)
+        self.assertEqual(self.app.list_heading.winfo_rooty(), heading_y)
 
     def test_invalid_input_and_no_selection_show_chinese_warning(self):
         self.app.add()
@@ -253,18 +335,53 @@ class GuiTests(unittest.TestCase):
                 check_children(child)
         check_children(self.root)
         texts = self.widget_texts()
+        self.assertNotIn("战斗纪事", texts)
+        self.assertNotIn("立即保存 / 重试", texts)
+        self.assertEqual(self.app.status_bar.winfo_rooty() + self.app.status_bar.winfo_height(),
+                         self.root.winfo_rooty() + self.root.winfo_height())
+        self.assertEqual(self.app.combatant_count.get(), "参战人数: 0")
+        self.assertEqual(self.app.round_count.get(), "回合数: 0")
+        self.assertEqual(self.app.status_bar.cget("style"), "StatusBar.TFrame")
+        tree_style = ttk.Style(self.root)
+        self.assertNotIn("Treeview.field", str(tree_style.layout("Treeview")))
+        self.assertEqual(tree_style.lookup("Treeview", "background", ("selected",)),
+                         self.app.colors["selection"])
+        self.assertLess(self.app.hp_panel.winfo_rooty() + self.app.hp_panel.winfo_height(),
+                        self.app.status_bar.winfo_rooty())
+        self.assertEqual(self.root.title(), "Dungeon Master Studio")
+        edge = self.root.winfo_rootx() + self.root.winfo_width()
+        top = self.root.winfo_rooty()
+        button_bottom = max(button.winfo_rooty() + button.winfo_height() for button in
+                            (self.app.start_button, self.app.next_button, self.app.end_button))
+        self.assertEqual(self.app.start_button.winfo_rooty() - top, 4)
+        self.assertEqual(edge - self.app.end_button.winfo_rootx()
+                         - self.app.end_button.winfo_width(), 4)
+        self.assertEqual(edge - self.app.form_shell.winfo_rootx()
+                         - self.app.form_shell.winfo_width(), 4)
+        self.assertEqual(self.app.listing.winfo_rootx() - self.root.winfo_rootx(), 4)
+        self.assertEqual(self.app.form_shell.winfo_rootx()
+                         - self.app.listing.winfo_rootx() - self.app.listing.winfo_width(), 4)
+        self.assertEqual(self.app.resize_handle.winfo_rootx(),
+                         self.app.listing.winfo_rootx() + self.app.listing.winfo_width())
+        self.assertEqual(self.app.resize_handle.winfo_width(), self.app.layout_gap)
+        self.assertEqual(self.app.form_shell.winfo_rooty() - button_bottom, 4)
+        self.assertEqual(self.app.hp_panel.winfo_rooty()
+                         - self.app.main_pane.winfo_rooty() - self.app.main_pane.winfo_height(), 4)
+        self.assertEqual(self.app.status_bar.winfo_rooty()
+                         - self.app.hp_panel.winfo_rooty() - self.app.hp_panel.winfo_height(), 4)
         self.assertEqual(self.app.start_button.icon_name, "Play")
         self.assertEqual(self.app.next_button.icon_name, "Next")
         self.assertEqual(self.app.end_button.icon_name, "Stop")
         for button in (self.app.start_button, self.app.next_button, self.app.end_button):
             self.assertEqual(button._color, "#F0F0F0")
             self.assertEqual(button._disabled_color, "#F0F0F0")
+            self.assertEqual(button._bg, "#3C3C3C")
         self.assertEqual(self.app.add_player_button.icon_name, "添加玩家")
         self.assertEqual(self.app.add_monster_button.icon_name, "添加怪物")
         player_icon_items = self.app.add_player_button.find_withtag("icon")
         self.assertIn("oval", [self.app.add_player_button.type(item) for item in player_icon_items])
         self.assertFalse(hasattr(self.app, "new_button"))
-        self.assertEqual(str(self.root.cget("background")), "#181818")
+        self.assertEqual(str(self.root.cget("background")), "#3C3C3C")
         self.assertNotIn("INITIATIVE ORDER  ·  行动序列", texts)
         self.assertNotIn("参战者", texts)
         self.assertNotIn("COMBATANT  ·  参战者档案", texts)
@@ -279,10 +396,13 @@ class GuiTests(unittest.TestCase):
         self.assertFalse(any(text.startswith("新增时当前 HP 留空") for text in texts))
         self.root.geometry("1080x580")
         self.root.update()
-        self.assertLess(self.app.form_canvas.yview()[1], 1.0)
-        self.app.form_canvas.yview_moveto(1.0)
-        self.root.update()
-        self.assertGreater(self.app.form_canvas.yview()[0], 0.0)
+        first, last = self.app.form_canvas.yview()
+        self.assertGreaterEqual(first, 0.0)
+        self.assertLessEqual(last, 1.0)
+        if last < 1.0:
+            self.app.form_canvas.yview_moveto(1.0)
+            self.root.update()
+            self.assertGreater(self.app.form_canvas.yview()[0], 0.0)
 
 
 if __name__ == "__main__":

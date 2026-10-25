@@ -4,10 +4,12 @@ import copy
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from battle_logic import Battle, BattleError, JsonStore
+from battle_tracker import BattleApp
 
 
 class BattleTests(unittest.TestCase):
@@ -21,6 +23,123 @@ class BattleTests(unittest.TestCase):
         a, b = self.add(), self.add()
         self.assertEqual(a.hp, 20)
         self.assertNotEqual(a.id, b.id)
+
+    def test_grell_stats_survive_save_without_actions_or_extra_hp(self):
+        handbook = json.loads((Path(__file__).resolve().parents[1] / "resources" /
+                               "monster_handbook.JSON").read_text(encoding="utf-8"))
+        grell = next(m for m in handbook["monsters"] if m["english_name"] == "Grell")
+        stats = BattleApp._handbook_stats(grell)
+        self.assertEqual(stats["armor_class"]["raw"], "12")
+        self.assertEqual(stats["abilities"]["strength"]["saving_throw"], 2)
+        self.assertIn("免疫闪电、倒地", stats["defenses"])
+        self.assertIn("劫持Abduct", stats["traits"][0])
+        self.assertNotIn("actions", stats)
+        self.assertNotIn("hit_points", stats)
+        self.assertNotIn("initiative", stats)
+        actor = self.b.add("触须怪", "怪物", 0, 55, monster_stats=stats)
+        restored = Battle.from_dict(self.b.to_dict()).get(actor.id)
+        self.assertEqual(restored.monster_stats, stats)
+
+    def test_existing_matching_monster_receives_handbook_stats(self):
+        actor = self.b.add("触须怪", "怪物", 0, 55)
+        app = BattleApp.__new__(BattleApp)
+        app.battle = self.b
+        app._handbook_monsters = None
+        self.assertTrue(app._enrich_existing_monsters())
+        self.assertEqual(actor.monster_stats["classification_raw"], "中型异怪，中立邪恶")
+        self.assertFalse(app._enrich_existing_monsters())
+
+    def test_sidebar_wheel_scrolls_only_when_pointer_is_inside(self):
+        app = BattleApp.__new__(BattleApp)
+        shell = SimpleNamespace(master=None)
+        canvas = SimpleNamespace(master=shell)
+        label = SimpleNamespace(master=canvas)
+        outside = SimpleNamespace(master=None)
+        movements = []
+        offset = [0.0]
+        canvas.bbox = lambda tag: (0, 0, 300, 1000)
+        canvas.winfo_height = lambda: 500
+        canvas.yview = lambda: (offset[0], offset[0] + 0.5)
+
+        def move_to(fraction):
+            offset[0] = fraction
+            movements.append(fraction)
+
+        canvas.yview_moveto = move_to
+        app.form_shell = shell
+        app.form_canvas = canvas
+        app.form_scrollbar = SimpleNamespace(master=shell)
+        app.form_visible = True
+        app._form_wheel_remainder = 0.0
+        app.root = SimpleNamespace(winfo_containing=lambda x, y: label)
+        event = SimpleNamespace(x_root=0, y_root=0, widget=label, delta=-2, num=None)
+        with patch("battle_tracker.sys.platform", "darwin"):
+            self.assertEqual(app._scroll_form_with_wheel(event), "break")
+            self.assertEqual(movements, [0.012])
+            self.assertEqual(app._scroll_form_with_wheel(event), "break")
+        self.assertEqual(movements, [0.012, 0.024])
+        app.root.winfo_containing = lambda x, y: outside
+        self.assertIsNone(app._scroll_form_with_wheel(event))
+        self.assertEqual(movements, [0.012, 0.024])
+        app.root.winfo_containing = lambda x, y: label
+        canvas.bbox = lambda tag: (0, 0, 300, 500)
+        app._form_wheel_remainder = 0.5
+        self.assertIsNone(app._scroll_form_with_wheel(event))
+        self.assertEqual(app._form_wheel_remainder, 0.0)
+        self.assertEqual(movements, [0.012, 0.024])
+
+    def test_combatant_list_scrolls_by_pixels(self):
+        app = BattleApp.__new__(BattleApp)
+        canvas = SimpleNamespace(master=None)
+        tree = SimpleNamespace(master=canvas)
+        positions = []
+        canvas.bbox = lambda tag: (0, 0, 300, 1000)
+        canvas.winfo_height = lambda: 500
+        canvas.yview = lambda: (positions[-1] if positions else 0.0, 0.5)
+        canvas.yview_moveto = positions.append
+        app.tree = tree
+        app.list_canvas = canvas
+        app.list_heading = SimpleNamespace(master=None)
+        app.list_scrollbar = SimpleNamespace(master=None)
+        app._list_wheel_remainder = 0.0
+        app.root = SimpleNamespace(winfo_containing=lambda x, y: tree)
+        event = SimpleNamespace(x_root=0, y_root=0, widget=tree, delta=-1, num=None)
+        with patch("battle_tracker.sys.platform", "darwin"):
+            self.assertEqual(app._scroll_list_with_wheel(event), "break")
+            self.assertEqual(app._scroll_list_with_wheel(event), "break")
+        self.assertEqual(positions, [0.006, 0.012])
+        canvas.bbox = lambda tag: (0, 0, 300, 500)
+        self.assertEqual(app._scroll_list_with_wheel(event), "break")
+        self.assertEqual(positions, [0.006, 0.012])
+
+    def test_panel_resize_uses_latest_pointer_without_initial_jump(self):
+        app = BattleApp.__new__(BattleApp)
+        position = [600]
+        scheduled = []
+
+        def sashpos(_index, value=None):
+            if value is not None:
+                position[0] = value
+            return position[0]
+
+        app.main_pane = SimpleNamespace(sashpos=sashpos, winfo_rootx=lambda: 100,
+                                        winfo_width=lambda: 1000)
+        app.resize_handle = SimpleNamespace(configure=lambda **kwargs: None)
+        app.colors = {"line_dark": "#555555", "parchment": "#181818"}
+        app.root = SimpleNamespace(after=lambda delay, callback: scheduled.append(callback) or "job",
+                                   after_cancel=lambda job: None)
+        app.form_visible = True
+        app._form_resize_job = None
+        app._drag_resize_job = None
+        app._drag_pointer_x = None
+        app._position_resize_handle = lambda: None
+        app._start_panel_resize(SimpleNamespace(x_root=703))
+        app._drag_panel_resize(SimpleNamespace(x_root=673))
+        app._drag_panel_resize(SimpleNamespace(x_root=653))
+        self.assertEqual(len(scheduled), 1)
+        scheduled[0]()
+        self.assertEqual(position[0], 550)
+        self.assertEqual(app.form_width, 450)
 
     def test_monster_numbering_and_rename(self):
         a = self.add("哥布林", kind="怪物")
