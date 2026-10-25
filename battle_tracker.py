@@ -2,6 +2,7 @@
 """启动中文 Tkinter 战斗追踪器：python3 battle_tracker.py。"""
 
 from pathlib import Path
+import json
 import sys
 
 try:
@@ -34,6 +35,9 @@ class BattleApp:
         self.form_title = tk.StringVar(value="添加参战者")
         self.form_mode = "add"
         self._form_resize_job = None
+        self._handbook_monsters = None
+        self._monster_picker = None
+        self._recent_monsters = []
         self.fields = {key: tk.StringVar() for key in ("name", "kind", "initiative", "max_hp", "hp")}
         self.amount = tk.StringVar(value="1")
         self._build_ui()
@@ -206,7 +210,7 @@ class BattleApp:
         listing_header.grid(row=0, column=0, columnspan=2, sticky="ew")
         self.add_monster_button = SvgIconButton(
             listing_header, RESOURCES_DIR / "AddMonster.svg", c["white"],
-            command=lambda: self.prepare_add("怪物"), icon_name="添加怪物",
+            command=self.open_monster_picker, icon_name="添加怪物",
             bg=c["paper"], hover_bg=c["pine_hover"], disabled_color=c["white"])
         self.add_monster_button.pack(side="right")
         self.add_player_button = SvgIconButton(
@@ -397,6 +401,177 @@ class BattleApp:
         self.form_title.set(f"添加{kind}")
         self.form_action_button.configure(text="确认添加", style="Primary.TButton")
         self.show_form()
+
+    def _monster_handbook(self):
+        """惰性读取 resources/monster_handbook.JSON，返回怪物名与最大 HP 等字段。"""
+        if self._handbook_monsters is not None:
+            return self._handbook_monsters
+        monsters = []
+        try:
+            with (RESOURCES_DIR / "monster_handbook.JSON").open("r", encoding="utf-8") as stream:
+                payload = json.load(stream)
+            for entry in payload.get("monsters", []):
+                name = (entry.get("name") or "").strip()
+                if not name:
+                    continue
+                hit_points = entry.get("hit_points") or {}
+                average = hit_points.get("average")
+                monsters.append({
+                    "id": entry.get("id") or name,
+                    "name": name,
+                    "english_name": (entry.get("english_name") or "").strip(),
+                    "max_hp": average if isinstance(average, int) and average >= 1 else None,
+                    "challenge_rating": (entry.get("challenge_rating") or "").strip(),
+                    "creature_type": (entry.get("creature_type") or "").strip(),
+                })
+        except (OSError, ValueError):
+            monsters = []
+        self._handbook_monsters = monsters
+        return self._handbook_monsters
+
+    def _apply_handbook_monster(self, monster):
+        """把图鉴里的怪物填入右侧“添加怪物”表单（名称 + 最大 HP）。"""
+        self.prepare_add("怪物")
+        self.fields["name"].set(monster["name"])
+        if isinstance(monster.get("max_hp"), int) and monster["max_hp"] >= 1:
+            self.fields["max_hp"].set(str(monster["max_hp"]))
+        self.fields["hp"].set("")
+        self._record_recent_monster(monster)
+
+    def _record_recent_monster(self, monster):
+        """LRU 缓存：把刚选用的怪物放到“最近使用”最前，最多保留 6 个。"""
+        self._recent_monsters = [m for m in self._recent_monsters if m["id"] != monster["id"]]
+        self._recent_monsters.insert(0, monster)
+        del self._recent_monsters[6:]
+
+    def open_monster_picker(self):
+        monsters = self._monster_handbook()
+        if not monsters:
+            messagebox.showwarning(
+                "怪物图鉴不可用",
+                "无法读取 resources/monster_handbook.JSON，或其中没有怪物。\n"
+                "请先运行 build_monster_handbook.py 生成图鉴，再重试。",
+                parent=self.root)
+            self.prepare_add("怪物")
+            return None
+
+        dialog = tk.Toplevel(self.root)
+        dialog.withdraw()
+        dialog.title("选择怪物")
+        dialog.transient(self.root)
+        dialog.configure(background=self.colors["paper"])
+        dialog.resizable(False, False)
+        self._monster_picker = dialog
+
+        header = ttk.Frame(dialog, style="CardBody.TFrame", padding=(14, 12))
+        header.pack(fill="x")
+        ttk.Label(header, text="搜索怪物名（中文或英文）", style="Muted.TLabel").pack(anchor="w")
+        search_var = tk.StringVar()
+        search_entry = ttk.Entry(header, textvariable=search_var, style="Field.TEntry")
+        search_entry.pack(fill="x", pady=(6, 0))
+
+        def pick_recent(monster):
+            self._apply_handbook_monster(monster)
+            dialog.destroy()
+
+        if self._recent_monsters:
+            recent_frame = ttk.Frame(dialog, style="CardBody.TFrame", padding=(14, 8, 14, 0))
+            recent_frame.pack(fill="x")
+            ttk.Label(recent_frame, text="最近使用", style="Eyebrow.TLabel").pack(anchor="w")
+            chips = ttk.Frame(recent_frame, style="CardBody.TFrame")
+            chips.pack(fill="x", pady=(4, 0))
+            for index, monster in enumerate(self._recent_monsters):
+                row, column = divmod(index, 3)
+                ttk.Button(chips, text=monster["name"], style="Quiet.TButton",
+                           command=lambda m=monster: pick_recent(m)).grid(
+                               row=row, column=column, sticky="ew", pady=(0, 4),
+                               padx=(0 if column == 2 else 4, 0))
+            for column in range(3):
+                chips.columnconfigure(column, weight=1)
+
+        body = ttk.Frame(dialog, style="CardBody.TFrame", padding=(14, 0))
+        body.pack(fill="both", expand=True)
+        listbox = tk.Listbox(body, height=16, width=38, font=self.body_font,
+                             bg=self.colors["input"], fg=self.colors["ink"],
+                             selectbackground=self.colors["selection"],
+                             selectforeground=self.colors["white"],
+                             highlightthickness=0, borderwidth=0, relief="flat",
+                             activestyle="none")
+        scrollbar = ttk.Scrollbar(body, orient="vertical", style="Vertical.TScrollbar",
+                                  command=listbox.yview)
+        listbox.configure(yscrollcommand=scrollbar.set)
+        listbox.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        detail_var = tk.StringVar()
+        ttk.Label(dialog, textvariable=detail_var, style="Muted.TLabel",
+                  padding=(14, 8), wraplength=380).pack(fill="x")
+
+        filtered = list(monsters)
+
+        def repopulate(_name=None, _index=None, _op=None):
+            query = search_var.get().strip().lower()
+            filtered.clear()
+            for monster in monsters:
+                if query and query not in monster["name"].lower() \
+                        and query not in monster["english_name"].lower():
+                    continue
+                filtered.append(monster)
+            listbox.delete(0, "end")
+            for monster in filtered:
+                listbox.insert("end", monster["name"])
+            detail_var.set("")
+
+        def on_select(_event=None):
+            selection = listbox.curselection()
+            if not selection:
+                return
+            monster = filtered[selection[0]]
+            parts = []
+            if monster["creature_type"]:
+                parts.append(monster["creature_type"])
+            if monster["max_hp"] is not None:
+                parts.append(f"生命值 {monster['max_hp']}")
+            if monster["challenge_rating"]:
+                parts.append(f"挑战等级 {monster['challenge_rating']}")
+            detail_var.set(" · ".join(parts))
+
+        def choose(_event=None):
+            selection = listbox.curselection()
+            if not selection and filtered:
+                listbox.selection_set(0)
+                listbox.activate(0)
+                selection = (0,)
+            if not selection:
+                return
+            self._apply_handbook_monster(filtered[selection[0]])
+            dialog.destroy()
+
+        footer = ttk.Frame(dialog, style="CardBody.TFrame", padding=(14, 12))
+        footer.pack(fill="x")
+        ttk.Button(footer, text="取消", style="Quiet.TButton",
+                   command=dialog.destroy).pack(side="right")
+        ttk.Button(footer, text="选择", style="Primary.TButton",
+                   command=choose).pack(side="right", padx=(0, 8))
+
+        listbox.bind("<<ListboxSelect>>", on_select)
+        listbox.bind("<Double-Button-1>", choose)
+        search_entry.bind("<Return>", choose)
+        search_entry.bind("<Escape>", lambda _event: dialog.destroy())
+        search_var.trace_add("write", repopulate)
+
+        repopulate()
+        dialog.update_idletasks()
+        x = self.root.winfo_rootx() + max(0, (self.root.winfo_width() - dialog.winfo_reqwidth()) // 2)
+        y = self.root.winfo_rooty() + max(0, (self.root.winfo_height() - dialog.winfo_reqheight()) // 2)
+        dialog.geometry(f"+{x}+{y}")
+        dialog.deiconify()
+        search_entry.focus_set()
+        try:
+            dialog.grab_set()
+        except tk.TclError:
+            pass
+        return dialog
 
     def commit_form(self):
         if self.form_mode == "edit":

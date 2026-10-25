@@ -151,10 +151,39 @@ class GuiTests(unittest.TestCase):
         self.assertGreaterEqual(self.app.form_action_button.winfo_rooty(),
                                 self.app.form_canvas.winfo_rooty() + self.app.form_canvas.winfo_height())
         self.app.add_monster_button.invoke()
+        picker = self.app._monster_picker
+        self.assertIsNotNone(picker)
+        self.assertTrue(picker.winfo_exists())
+        self.addCleanup(picker.destroy)
+        monsters = self.app._monster_handbook()
+        self.assertGreater(len(monsters), 0)
+        monster = next(m for m in monsters if m["max_hp"])
+        self.app._apply_handbook_monster(monster)
+        self.assertEqual(self.app._recent_monsters[0]["id"], monster["id"])
+        self.assertEqual(len(self.app._recent_monsters), 1)
         self.assertEqual(self.app.form_mode, "add")
         self.assertEqual(self.app.fields["kind"].get(), "怪物")
+        self.assertEqual(self.app.fields["name"].get(), monster["name"])
+        self.assertEqual(self.app.fields["max_hp"].get(), str(monster["max_hp"]))
         self.assertEqual(self.app.form_title.get(), "添加怪物")
         self.assertEqual(str(self.app.form_action_button["text"]), "确认添加")
+        # 记录最近使用后再次打开，会渲染“最近使用”区块。
+        self.app.open_monster_picker()
+        self.assertIsNotNone(self.app._monster_picker)
+        self.addCleanup(self.app._monster_picker.destroy)
+
+    def test_monster_recent_cache_keeps_latest_six(self):
+        monsters = self.app._monster_handbook()
+        chosen = [m for m in monsters if m["max_hp"]][:7]
+        self.assertGreaterEqual(len(chosen), 7)
+        for monster in chosen:
+            self.app._apply_handbook_monster(monster)
+        self.assertEqual(len(self.app._recent_monsters), 6)
+        self.assertEqual(self.app._recent_monsters[0]["id"], chosen[6]["id"])
+        self.assertNotIn(chosen[0]["id"], [m["id"] for m in self.app._recent_monsters])
+        self.app._apply_handbook_monster(chosen[3])
+        self.assertEqual(len(self.app._recent_monsters), 6)
+        self.assertEqual(self.app._recent_monsters[0]["id"], chosen[3]["id"])
 
     def test_invalid_input_and_no_selection_show_chinese_warning(self):
         self.app.add()
