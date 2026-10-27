@@ -1,0 +1,18 @@
+[package]
+name = "dungeon-master-studio"
+version = "0.1.0"
+description = "Offline DM combat workbench"
+edition = "2021"
+
+[lib]
+name = "dungeon_master_studio_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]

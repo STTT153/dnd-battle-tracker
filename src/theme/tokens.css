@@ -1,0 +1,79 @@
+:root {
+  color-scheme: dark;
+
+  --modal-backdrop: #00000099;
+  --error-foreground: #f48771;
+  --current-background: #203b2c;
+  --current-foreground: #89d185;
+  --button-background: #0e639c;
+  --button-foreground: #ffffff;
+  --input-background: #313131;
+  --dialog-width: 460px;
+  --catalog-width: 860px;
+  --catalog-dialog-height: 680px;
+  --search-min-width: 180px;
+  --selection-width: 2px;
+  --hp-input-width: 64px;
+
+  /* VS Code Dark Modern inspired semantic colors. */
+  --editor-background: #1f1f1f;
+  --sidebar-background: #181818;
+  --toolbar-background: #181818;
+  --activity-background: #181818;
+  --status-background: #007acc;
+  --status-foreground: #ffffff;
+  --foreground: #cccccc;
+  --foreground-strong: #f0f0f0;
+  --muted-foreground: #9d9d9d;
+  --disabled-foreground: #777777;
+  --border-color: #2b2b2b;
+  --hover-background: #2a2d2e;
+  --pressed-background: #3b3b3b;
+  --selected-background: #37373d;
+  --focus-color: #007fd4;
+  --accent-color: #3794ff;
+  --notice-background: #202b36;
+  --notice-border: #304354;
+  --badge-background: #313131;
+  --badge-foreground: #cccccc;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+
+  --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', sans-serif;
+  --font-size-small: 11px;
+  --font-size-body: 13px;
+  --font-size-title: 14px;
+  --font-size-heading: 18px;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-strong: 600;
+  --line-height: 1.5;
+  --line-height-relaxed: 1.8;
+
+  --border-width: 1px;
+  --focus-width: 1px;
+  --focus-offset: -1px;
+  --radius-small: 3px;
+  --button-size: 28px;
+  --icon-size: 16px;
+  --empty-icon-size: 44px;
+  --activity-icon-size: 24px;
+  --activity-bar-width: 48px;
+  --activity-button-height: 56px;
+  --activity-indicator-width: 2px;
+  --resize-width: 4px;
+  --title-height: 34px;
+  --toolbar-height: 36px;
+  --panel-heading-height: 36px;
+  --tab-height: 36px;
+  --status-height: 24px;
+  --empty-state-height: 260px;
+  --description-width: 440px;
+}

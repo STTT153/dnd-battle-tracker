@@ -1,0 +1,6 @@
+.dialog { color: var(--foreground); background: var(--sidebar-background); border: var(--border-width) solid var(--notice-border); border-radius: var(--radius-small); padding: var(--space-6); width: min(var(--dialog-width), calc(100vw - var(--space-8))); max-height: calc(100vh - var(--space-8)); overflow: auto; }
+.dialog::backdrop { background: var(--modal-backdrop); }
+.dialog[open] { display: flex; flex-direction: column; }
+.dialog h2 { margin: 0 0 var(--space-4); font-size: var(--font-size-heading); color: var(--foreground-strong); }
+.wide { width: min(var(--catalog-width), calc(100vw - var(--space-8))); height: min(var(--catalog-dialog-height), calc(100vh - var(--space-8))); }
+.actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-5); }

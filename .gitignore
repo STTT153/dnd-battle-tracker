@@ -1,8 +1,7 @@
-__pycache__/
-battle_save.json
-battle_save.json.*
 .codex
-.venv
-.dnd5e
-.style
-
+node_modules/
+dist/
+coverage/
+src-tauri/target/
+src-tauri/gen/
+.DS_Store
